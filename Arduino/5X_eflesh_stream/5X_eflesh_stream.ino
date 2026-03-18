@@ -10,7 +10,7 @@
 */
 
 #include <Wire.h>
-#include <MLX90393.h>
+#include "MLX90393.h"
 
 // #define Serial SERIAL_PORT_USBVIRTUAL  // use default Serial if your board doesn't define this
 
@@ -28,18 +28,22 @@ void scanI2C(uint8_t* found, uint8_t& count);
 void chooseOrderedAddresses(const uint8_t* found, uint8_t count, uint8_t* ordered, uint8_t& orderedCount);
 bool hasExactSet(const uint8_t* found, uint8_t count, const uint8_t* pattern);
 void sortAscending(uint8_t* arr, uint8_t n);
+uint8_t foundCount = 0;
 
 // Initialization values
-int32_t init_x = 0;
-int32_t init_y = 0;
-int32_t init_z = 0;
-int32_t x_value = 0;
-int32_t y_value = 0;
-int32_t z_value = 0;
+int32_t init_x[4] = {0, 0, 0, 0};
+int32_t init_y[4] = {0, 0, 0, 0};
+int32_t init_z[4] = {0, 0, 0, 0};
+int32_t x_value[4] = {0, 0, 0, 0};
+int32_t y_value[4] = {0, 0, 0, 0};
+int32_t z_value[4] = {0, 0, 0, 0};
+int32_t x_normalized[4] = {0, 0, 0, 0};
+int32_t y_normalized[4] = {0, 0, 0, 0};
+int32_t z_normalized[4] = {0, 0, 0, 0};
 int counter = 1;
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   while (!Serial) { delay(5); }
 
   Wire.begin();
@@ -47,7 +51,7 @@ void setup() {
   delay(10);
 
   uint8_t found[16] = {0};
-  uint8_t foundCount = 0;
+
   scanI2C(found, foundCount);
 
   Serial.println(F("I2C scan complete."));
@@ -91,39 +95,104 @@ void setup() {
     Serial.print("0x"); Serial.print(ordered[i], HEX); Serial.print(" ");
   }
   Serial.println();
-  delayMicroseconds(500);
-
+  // delayMicroseconds(500);
+  Serial.print("headers: ");
+  Serial.print("Time(s): ");
+  Serial.print("Sensor1x: ");
+  Serial.print("Sensor1y: ");
+  Serial.print("Sensor1z: ");
+  Serial.print("Sensor2x: ");
+  Serial.print("Sensor2y: ");
+  Serial.print("Sensor2z: ");
+  Serial.print("Sensor3x: ");
+  Serial.print("Sensor3y: ");
+  Serial.print("Sensor3z: ");
+  Serial.print("Sensor4x: ");
+  Serial.print("Sensor4y: ");
+  Serial.print("Sensor4z: ");
+  Serial.println();
 }
 
 void loop() {
   counter++;
-  MLX90393::txyzRaw raw_txyz;
-  byte statusCheck = mlx[0].readMeasurement(0xF, raw_txyz);
-  //Serial.print(F(" statusCheck="));Serial.println(statusCheck, HEX);
-  if (init_x == 0 && raw_txyz.x != -1 && counter > 10){
-    init_x = -raw_txyz.x;
-    Serial.println(init_x);
-  }
-  if (init_y == 0 && raw_txyz.y != -1 && counter > 10){
-    init_y = -raw_txyz.y;
-    Serial.println(init_y);
-  }
-  if (init_z == 0 && raw_txyz.z != -1 && counter > 10){
-    init_z = -raw_txyz.z;
-    Serial.println(init_z);
+  MLX90393::txyzRaw raw_txyz[4];
+  MLX90393::txyz txyz[4];
+  for (int i = 0; i < foundCount; i++){
+      byte statusCheck = mlx[i].readMeasurement(0xF, raw_txyz[i]);
+      txyz[i] = mlx[i].convertRaw(raw_txyz[i]);
   }
 
-  x_value = -raw_txyz.x;
-  y_value = -raw_txyz.y;
-  z_value = -raw_txyz.z;
-  int32_t x_normalized = x_value - init_x;
-  int32_t y_normalized = y_value - init_y;
-  int32_t z_normalized = z_value - init_z;
-  Serial.print("Upper_limit:"); Serial.print(100); Serial.print(",");
-  Serial.print("Lower_imit:"); Serial.print(-100); Serial.print(",");
-  Serial.print("x_value:"); Serial.print(x_normalized);Serial.print(",");
-  Serial.print("y_value:"); Serial.print(y_normalized);Serial.print(",");
-  Serial.print("z_value:"); Serial.println(z_normalized);
+  //Serial.print(F(" statusCheck="));Serial.println(statusCheck, HEX);
+  for (int i = 0; i < foundCount; i++){
+    if (init_x[i] == 0 && txyz[i].x != -1 && counter > 50){
+      init_x[i] = txyz[i].x;
+      // Serial.println(init_x[i]);
+    }
+    if (init_y[i] == 0 && txyz[i].y != -1 && counter > 50){
+      init_y[i] = txyz[i].y;
+      // Serial.println(init_y[i]);
+    }
+    if (init_z[i] == 0 && txyz[i].z != -1 && counter > 50){
+      init_z[i] = txyz[i].z;
+      // Serial.println(init_z[i]);
+    }
+  }
+
+  float t = millis()/1000.0;
+  Serial.print(t);
+  Serial.print(" ");
+
+  for (int i = 0; i < foundCount; i++){
+    x_value[i] = txyz[i].x;
+    y_value[i] = txyz[i].y;
+    z_value[i] = txyz[i].z;
+    x_normalized[i] = x_value[i] - init_x[i];
+    y_normalized[i] = y_value[i] - init_y[i];
+    z_normalized[i] = z_value[i] - init_z[i];
+    Serial.print(x_normalized[i]);
+    Serial.print(" ");
+    Serial.print(y_normalized[i]);
+    Serial.print(" ");
+    Serial.print(z_normalized[i]);
+    Serial.print(" ");
+    // Serial.print(200);
+    // Serial.print("\t");
+    // Serial.print(-200);
+    // Serial.print("\t");
+  }
+  Serial.println();
+
+
+
+
+  // Serial.print("x_value0:"); Serial.print(x_normalized[0]);Serial.print(",");
+  // Serial.print("y_value0:"); Serial.print(y_normalized[0]);Serial.print(",");
+  // Serial.print("z_value0:"); Serial.print(z_normalized[0]);Serial.print(",");
+  // Serial.print("x_value1:"); Serial.print(x_normalized[1]);Serial.print(",");
+  // Serial.print("y_value1:"); Serial.print(y_normalized[1]);Serial.print(",");
+  // Serial.print("z_value1:"); Serial.print(z_normalized[1]);Serial.print(",");
+  // Serial.print("x_value2:"); Serial.print(x_normalized[2]);Serial.print(",");
+  // Serial.print("y_value2:"); Serial.print(y_normalized[2]);Serial.print(",");
+  // Serial.print("z_value2:"); Serial.print(z_normalized[2]);Serial.print(",");
+  // Serial.print("x_value3:"); Serial.print(x_normalized[3]);Serial.print(",");
+  // Serial.print("y_value3:"); Serial.print(y_normalized[3]);Serial.print(",");
+  // Serial.print("z_value3:"); Serial.println(z_normalized[3]);
+
+  // x_value = txyz.x;
+  // y_value = txyz.y;
+  // z_value = txyz.z;
+  // int32_t x_normalized = x_value - init_x;
+  // int32_t y_normalized = y_value - init_y;
+  // int32_t z_normalized = z_value - init_z;
+  // Serial.print("Upper_limit:"); Serial.print(100); Serial.print(",");
+  // Serial.print("Lower_imit:"); Serial.print(-100); Serial.print(",");
+  // Serial.print("x_value:"); Serial.print(x_normalized);Serial.print(",");
+  // Serial.print("y_value:"); Serial.print(y_normalized);Serial.print(",");
+  // Serial.print("z_value:"); Serial.println(z_normalized);
+  // Serial.print(",");
+  // Serial.print("x_value_raw:"); Serial.print(raw_txyz.x);Serial.print(",");
+  // Serial.print("y_value_raw:"); Serial.print(raw_txyz.y);Serial.print(",");
+  // Serial.print("z_value_raw:"); Serial.println(raw_txyz.z);
 
   delayMicroseconds(500);
   /*

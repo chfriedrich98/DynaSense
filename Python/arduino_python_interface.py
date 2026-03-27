@@ -2,13 +2,22 @@ import serial
 from serial.tools import list_ports
 import time
 import csv
+from datetime import datetime
 import matplotlib.pyplot as plt
+import os
 
 ports = list_ports.comports()
 for port in ports: print (port)
 
-port = '/dev/ttyACM4'  # Change this to your Arduino's port
-baud_rate = 115200
+port = '/dev/ttyACM0'  # Change this to your Arduino's port
+baud_rate = 115200 # Change this to match the baud rate set for your Arduino
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+date_folder = datetime.now().strftime('%Y_%m_%d')
+script_dir = os.path.dirname(os.path.abspath(__file__))
+data_path = os.path.join(script_dir, 'collected_data', date_folder)
+os.makedirs(data_path, exist_ok=True)
+f = open(f'{data_path}/sensor_data_{timestamp}.csv', 'w', newline='')
+writer = csv.writer(f, delimiter=',')
 sensor_data_stream_started = False
 headers = []
 heatmap_rows = 3
@@ -48,6 +57,7 @@ try:
                     headers = decoded_bytes.split()
                     headers = headers[1:]  # Remove the "headers: " part
 
+                    writer.writerow(headers)
                     print("Received headers:", headers)
                     sensor_data_stream_started = True
             else:
@@ -61,12 +71,13 @@ try:
 
                 decoded_bytes = latest_bytes.decode('utf-8').strip('\r\n')
                 data_values = decoded_bytes.split()
+
                 sensor_values = data_values[1:]  # Remove the timestamp
 
                 # if len(data_values) != expected_value_count:
                 #     print("Skipping incomplete data row:", decoded_bytes)
                 #     continue
-
+                writer.writerow(data_values)
                 print("Received data:", data_values)
                 heatmap_values = [abs(float(value)) for value in sensor_values]
                 heatmap_grid = [
@@ -87,4 +98,10 @@ try:
 finally:
     print("Closing serial port.")
     serialCom.close()
+    print("Serial port closed.")
+    print("Closing plot.")
     plt.close(figure)
+    print("Plot closed.")
+    print("Closing CSV file.")
+    f.close()
+    print("CSV file closed.")

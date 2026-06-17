@@ -28,6 +28,7 @@ ANGLE_STEP = 30.0
 NUM_SENSORS = 8
 SENSOR_START_ANGLE_DEG = -90
 SENSOR_ANGLES_DEG = SENSOR_START_ANGLE_DEG + np.arange(NUM_SENSORS) * ANGLE_STEP
+PLOT_ROTATION_DEG = 180.0
 
 AXES_PER_SENSOR = 3
 FLOAT_SIZE_BYTES = 4
@@ -62,6 +63,8 @@ PLOT_Y_MAX = CENTER_Y + SENSOR_RADIUS + PLOT_MARGIN
 
 BACKGROUND_IMAGE_PATH = Path(__file__).with_name("eFlesh_background.png")
 BACKGROUND_IMAGE_OPACITY = 0.35
+BACKGROUND_DISPLAY_SHIFT_X = -20.0
+BACKGROUND_DISPLAY_SHIFT_Y = -15.0
 SETTINGS_YAML_PATH = Path(__file__).with_name("udp_viewer_settings.yaml")
 
 # Render and IO cadence are independent to minimize perceived latency.
@@ -76,24 +79,45 @@ SENSOR_INDEX_FONT_PT = 13
 SENSOR_VALUE_FONT_PT = 30
 HUD_FONT_PT = 30
 
+
+def rotate_xy(x, y, angle_deg, center_x=CENTER_X, center_y=CENTER_Y):
+    angle_rad = np.deg2rad(angle_deg)
+    cos_theta = np.cos(angle_rad)
+    sin_theta = np.sin(angle_rad)
+    dx = x - center_x
+    dy = y - center_y
+    return (
+        center_x + dx * cos_theta - dy * sin_theta,
+        center_y + dx * sin_theta + dy * cos_theta,
+    )
+
+
+sensor_base_x = CENTER_X + SENSOR_RADIUS * np.cos(np.deg2rad(SENSOR_ANGLES_DEG))
+sensor_base_y = CENTER_Y + SENSOR_RADIUS * np.sin(np.deg2rad(SENSOR_ANGLES_DEG))
+sensor_x, sensor_y = rotate_xy(sensor_base_x, sensor_base_y, PLOT_ROTATION_DEG)
+
 sensor_pos = np.column_stack(
     (
-        CENTER_X + SENSOR_RADIUS * np.cos(np.deg2rad(SENSOR_ANGLES_DEG)),
-        CENTER_Y + SENSOR_RADIUS * np.sin(np.deg2rad(SENSOR_ANGLES_DEG)),
+        sensor_x,
+        sensor_y,
         np.zeros(len(SENSOR_ANGLES_DEG)),
     )
 )
+label_base_x = CENTER_X + (SENSOR_RADIUS + 20.0) * np.cos(np.deg2rad(SENSOR_ANGLES_DEG))
+label_base_y = CENTER_Y + (SENSOR_RADIUS + 20.0) * np.sin(np.deg2rad(SENSOR_ANGLES_DEG))
+label_x, label_y = rotate_xy(label_base_x, label_base_y, PLOT_ROTATION_DEG)
 sensor_label_pos = np.column_stack(
     (
-        CENTER_X + (SENSOR_RADIUS + 20.0) * np.cos(np.deg2rad(SENSOR_ANGLES_DEG)),
-        CENTER_Y + (SENSOR_RADIUS + 20.0) * np.sin(np.deg2rad(SENSOR_ANGLES_DEG)),
+        label_x,
+        label_y,
     )
 )
 
 ring_angles_deg = np.linspace(ARC_START_DEG, ARC_END_DEG, RING_SAMPLE_COUNT, endpoint=False)
 ring_angles_rad = np.deg2rad(ring_angles_deg)
-ring_x = CENTER_X + SENSOR_RADIUS * np.cos(ring_angles_rad)
-ring_y = CENTER_Y + SENSOR_RADIUS * np.sin(ring_angles_rad)
+ring_base_x = CENTER_X + SENSOR_RADIUS * np.cos(ring_angles_rad)
+ring_base_y = CENTER_Y + SENSOR_RADIUS * np.sin(ring_angles_rad)
+ring_x, ring_y = rotate_xy(ring_base_x, ring_base_y, PLOT_ROTATION_DEG)
 
 
 class UdpLatestPacketReceiver:
@@ -335,16 +359,21 @@ class LiveUdpPlot:
         plot_height = PLOT_Y_MAX - PLOT_Y_MIN
         image_width = pixmap.width()
         image_height = pixmap.height()
-        uniform_scale = min(plot_width / image_width, plot_height / image_height)
-        scaled_width = image_width * uniform_scale
-        scaled_height = image_height * uniform_scale
+        image_scale = min(plot_width / image_width, plot_height / image_height) * 1.25
+        scaled_width = image_width * image_scale
+        scaled_height = image_height * image_scale
         offset_x = PLOT_X_MIN + (plot_width - scaled_width) / 2.0 - 50
         offset_y = PLOT_Y_MIN + (plot_height - scaled_height) / 2.0 - 15
+        center_x = offset_x + scaled_width / 2.0
+        center_y = offset_y + scaled_height / 2.0
+        center_x, center_y = rotate_xy(center_x, center_y, PLOT_ROTATION_DEG)
+        center_x += BACKGROUND_DISPLAY_SHIFT_X
+        center_y += BACKGROUND_DISPLAY_SHIFT_Y
 
-        transform = QtGui.QTransform()
-        transform.translate(offset_x, offset_y)
-        transform.scale(uniform_scale*1.25, uniform_scale*1.25)
-        background_item.setTransform(transform)
+        background_item.setOffset(-image_width / 2.0, -image_height / 2.0)
+        background_item.setPos(center_x, center_y)
+        background_item.setScale(image_scale)
+        background_item.setRotation(PLOT_ROTATION_DEG)
         background_item.setTransformationMode(QtCore.Qt.TransformationMode.SmoothTransformation)
         background_item.setOpacity(BACKGROUND_IMAGE_OPACITY)
         background_item.setZValue(-100)

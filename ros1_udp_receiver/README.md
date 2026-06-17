@@ -15,13 +15,19 @@ From `ros1_udp_receiver/`:
 
 ```bash
 docker compose build
-docker compose up -d dynasense-ros1-udp
 ```
 
 Attach a shell:
 
 ```bash
+docker compose up -d dynasense-ros1-udp
 docker compose exec dynasense-ros1-udp bash
+```
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /workspaces/dynasense/ros1_udp_receiver/catkin_ws/devel/setup.bash
+rostopic echo /dynasense/knee_vis
 ```
 
 Stop when done:

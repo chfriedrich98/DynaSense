@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import socket
 import time
-from pathlib import Path
 
 import numpy as np
 import rospy
@@ -52,14 +51,9 @@ class DynasenseUdpReceiverNode:
         self.discovery_period_s = float(rospy.get_param("~discovery_period_s", 2.0))
         self.auto_tare_delay_s = float(rospy.get_param("~auto_tare_delay_s", 10.0))
         self.connection_timeout_s = float(rospy.get_param("~connection_timeout_s", 1.0))
+        self.knee_vis_start_angle_deg = float(rospy.get_param("~knee_vis_start_angle_deg", 210.0))
 
         stream_order_raw = list(rospy.get_param("~stream_order", [1, 2, 3, 4, 5, 6, 7, 8]))
-        settings_yaml = str(rospy.get_param("~settings_yaml", "")).strip()
-
-        if settings_yaml:
-            loaded = self._load_stream_order_from_yaml(Path(settings_yaml))
-            if loaded is not None:
-                stream_order_raw = loaded
 
         self.stream_order = self._validate_stream_order(stream_order_raw)
 
@@ -99,32 +93,6 @@ class DynasenseUdpReceiverNode:
             ",".join(str(int(i) + 1) for i in self.stream_order),
         )
         rospy.loginfo("Auto-tare delay: %.2f s", self.auto_tare_delay_s)
-
-    def _load_stream_order_from_yaml(self, path):
-        if not path.exists():
-            rospy.logwarn("settings_yaml does not exist: %s", str(path))
-            return None
-
-        try:
-            content = path.read_text(encoding="utf-8")
-            stream_order_text = None
-            for raw_line in content.splitlines():
-                line = raw_line.split("#", 1)[0].strip()
-                if not line or not line.startswith("stream_order:"):
-                    continue
-                stream_order_text = line.split(":", 1)[1].strip()
-                break
-
-            if not stream_order_text:
-                raise ValueError("Missing stream_order entry.")
-
-            normalized_text = stream_order_text.replace("[", "").replace("]", "")
-            values = [int(token.strip()) for token in normalized_text.split(",") if token.strip()]
-            rospy.loginfo("Loaded stream_order from %s: %s", str(path), values)
-            return values
-        except Exception as exc:
-            rospy.logwarn("Failed to parse settings_yaml %s: %s", str(path), str(exc))
-            return None
 
     def _validate_stream_order(self, stream_order_raw):
         if len(stream_order_raw) != self.num_sensors:
@@ -212,8 +180,8 @@ class DynasenseUdpReceiverNode:
         if sensor_mag.size != self.num_sensors:
             return 0.0, 0.0
 
-        angles_deg = 210.0 - np.arange(self.num_sensors, dtype=np.float32) * 30.0
-        angles_rad = np.deg2rad(angles_deg)
+        angles_deg = self.knee_vis_start_angle_deg - np.arange(self.num_sensors, dtype=np.float32) * 30.0
+        angles_rad = np.mod(np.deg2rad(angles_deg), 2.0 * np.pi)
 
         unit_x = -np.cos(angles_rad)
         unit_y = -np.sin(angles_rad)
@@ -222,7 +190,11 @@ class DynasenseUdpReceiverNode:
         sum_dy = float(np.sum(unit_y * sensor_mag))
 
         sum_arrow_len = float(np.hypot(sum_dx, sum_dy))
-        angle_deg = float(np.degrees(np.arctan2(sum_dy, sum_dx))) if sum_arrow_len > 1e-9 else 0.0
+        if sum_arrow_len > 1e-9:
+            angle_rad = float(np.mod(np.arctan2(sum_dy, sum_dx), 2.0 * np.pi))
+            angle_deg = float(np.degrees(angle_rad))
+        else:
+            angle_deg = 0.0
         return angle_deg, sum_arrow_len
 
     def _on_report_timer(self, _event):

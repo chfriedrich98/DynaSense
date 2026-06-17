@@ -1,0 +1,13 @@
+services:
+  dynasense-ros2-udp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dynasense-ros2-udp
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    volumes:
+      - ../Python:/workspaces/dynasense/Python:ro
+    command: ros2 launch dynasense_udp_receiver udp_sensor_node.launch.py

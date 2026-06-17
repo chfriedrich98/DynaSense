@@ -1,0 +1,11 @@
+dynasense_udp_receiver:
+  ros__parameters:
+    udp_port: 4210
+    num_sensors: 8
+    axes_per_sensor: 3
+    max_drain_packets: 800
+    poll_period_s: 0.001
+    discovery_period_s: 2.0
+    auto_tare_delay_s: 10.0
+    stream_order: [1, 2, 3, 4, 5, 6, 7, 8]
+    settings_yaml: "/workspaces/dynasense/Python/udp_viewer_settings.yaml"

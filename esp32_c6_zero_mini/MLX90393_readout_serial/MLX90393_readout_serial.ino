@@ -12,8 +12,8 @@
 #include <Wire.h>
 #include "MLX90393.h"
 
-#define SDA_PIN 0   // choose your GPIO
-#define SCL_PIN 1   // choose your GPIO
+#define SDA_PIN 4   // choose your GPIO
+#define SCL_PIN 2   // choose your GPIO
 
 // #define Serial SERIAL_PORT_USBVIRTUAL  // use default Serial if your board doesn't define this
 
@@ -46,7 +46,7 @@ int32_t z_normalized[4] = {0, 0, 0, 0};
 int counter = 1;
 
 void setup() {
-  Serial.begin(921600);
+  Serial.begin(9600);
   Serial.println("Starting setup");
   while (!Serial) { delay(5); }
 

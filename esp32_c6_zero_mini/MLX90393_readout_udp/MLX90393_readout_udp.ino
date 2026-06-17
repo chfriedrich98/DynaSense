@@ -14,8 +14,8 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-#define SDA_PIN 0   // choose your GPIO
-#define SCL_PIN 1   // choose your GPIO
+#define SDA_PIN 4   // choose your GPIO
+#define SCL_PIN 2   // choose your GPIO
 
 // ---------------- WIFI ----------------
 WiFiUDP udp;
@@ -49,10 +49,11 @@ void setup() {
   Serial.begin(921600);
   Serial.println("Starting setup");
   int serial_connect_attempts = 5;
-  while (!Serial && serial_connect_attempts > 0) {
-    delay(5);
-    serial_connect_attempts--;
-  }
+  // while (!Serial && serial_connect_attempts > 0) {
+  //   delay(5);
+  //   serial_connect_attempts--;
+  //   Serial.println("Serial Connected");
+  // }
 
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(400000);
@@ -61,6 +62,11 @@ void setup() {
   uint8_t found[16] = {0};
 
   scanI2C(found, foundCount);
+  if (foundCount == 0){
+    #ifdef RGB_BUILTIN
+      neopixelWrite(RGB_BUILTIN,RGB_BRIGHTNESS,0,0); // Red
+    #endif
+  }
 
   Serial.println(F("I2C scan complete."));
   Serial.print(F("Found MLX candidates: "));

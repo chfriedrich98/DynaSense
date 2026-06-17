@@ -1,0 +1,282 @@
+import socket
+import time
+from pathlib import Path
+from typing import List
+
+import numpy as np
+import rclpy
+from dynasense_msgs.msg import KneeVisMsg
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray
+
+
+class UdpLatestPacketReceiver:
+    def __init__(self, port: int) -> None:
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.sock.bind(("", port))
+        self.sock.setblocking(False)
+
+    def send_discovery(self) -> None:
+        self.sock.sendto(b"DISCOVER", ("255.255.255.255", self.port))
+
+    def poll_latest(self, packet_size: int, max_drain_packets: int) -> tuple[bytes | None, int]:
+        latest_data = None
+        packets = 0
+
+        for _ in range(max_drain_packets):
+            try:
+                data, _ = self.sock.recvfrom(1024)
+            except BlockingIOError:
+                break
+
+            if len(data) == packet_size:
+                latest_data = data
+                packets += 1
+
+        return latest_data, packets
+
+
+class DynasenseUdpReceiverNode(Node):
+    def __init__(self) -> None:
+        super().__init__("dynasense_udp_receiver")
+
+        # Match contact_visualization_udp arrow constants.
+        self.mag_max = 1000.0
+        self.sensor_radius = 70.0
+        self.arrow_length_scale = 0.5
+
+        self.declare_parameter("udp_port", 4210)
+        self.declare_parameter("num_sensors", 8)
+        self.declare_parameter("axes_per_sensor", 3)
+        self.declare_parameter("max_drain_packets", 800)
+        self.declare_parameter("poll_period_s", 0.001)
+        self.declare_parameter("stream_order", [1, 2, 3, 4, 5, 6, 7, 8])
+        self.declare_parameter("settings_yaml", "")
+        self.declare_parameter("discovery_period_s", 2.0)
+        self.declare_parameter("auto_tare_delay_s", 10.0)
+        self.declare_parameter("connection_timeout_s", 1.0)
+
+        self.udp_port = int(self.get_parameter("udp_port").value)
+        self.num_sensors = int(self.get_parameter("num_sensors").value)
+        self.axes_per_sensor = int(self.get_parameter("axes_per_sensor").value)
+        self.max_drain_packets = int(self.get_parameter("max_drain_packets").value)
+        self.poll_period_s = float(self.get_parameter("poll_period_s").value)
+        self.discovery_period_s = float(self.get_parameter("discovery_period_s").value)
+        self.auto_tare_delay_s = float(self.get_parameter("auto_tare_delay_s").value)
+        self.connection_timeout_s = float(self.get_parameter("connection_timeout_s").value)
+
+        stream_order_raw = list(self.get_parameter("stream_order").value)
+        settings_yaml = str(self.get_parameter("settings_yaml").value).strip()
+
+        if settings_yaml:
+            loaded = self._load_stream_order_from_yaml(Path(settings_yaml))
+            if loaded is not None:
+                stream_order_raw = loaded
+
+        self.stream_order = self._validate_stream_order(stream_order_raw)
+
+        self.packet_float_count = self.num_sensors * self.axes_per_sensor
+        self.packet_size = self.packet_float_count * 4
+
+        self.receiver = UdpLatestPacketReceiver(self.udp_port)
+        self.receiver.send_discovery()
+
+        self.raw_flat_pub = self.create_publisher(Float32MultiArray, "dynasense/raw_flat", 10)
+        self.ordered_vectors_pub = self.create_publisher(Float32MultiArray, "dynasense/ordered_vectors", 10)
+        self.magnitudes_pub = self.create_publisher(Float32MultiArray, "dynasense/magnitudes", 10)
+        self.knee_vis_pub = self.create_publisher(KneeVisMsg, "dynasense/knee_vis", 10)
+
+        self.latest_packet = None
+        self.baseline_offset = np.zeros((self.num_sensors, self.axes_per_sensor), dtype=np.float32)
+        self.auto_tare_done = False
+        self.start_time = time.perf_counter()
+        self.last_packet_time = 0.0
+        self.connection_active = False
+        self.packets_since_report = 0
+        self.last_rate_report_time = time.perf_counter()
+
+        self.poll_timer = self.create_timer(self.poll_period_s, self._on_poll_timer)
+        self.discovery_timer = self.create_timer(self.discovery_period_s, self._on_discovery_timer)
+        self.report_timer = self.create_timer(1.0, self._report_rate)
+
+        self.get_logger().info(
+            "Listening on UDP port %d for %d sensors x %d axes (packet size=%d bytes)"
+            % (self.udp_port, self.num_sensors, self.axes_per_sensor, self.packet_size)
+        )
+        self.get_logger().info(
+            "Using stream order (display->stream, 1-based): %s"
+            % ",".join(str(int(i) + 1) for i in self.stream_order)
+        )
+        self.get_logger().info(
+            "Auto-tare delay: %.2f s" % self.auto_tare_delay_s
+        )
+
+    def _load_stream_order_from_yaml(self, path: Path) -> List[int] | None:
+        if not path.exists():
+            self.get_logger().warning(f"settings_yaml does not exist: {path}")
+            return None
+
+        try:
+            content = path.read_text(encoding="utf-8")
+            stream_order_text = None
+            for raw_line in content.splitlines():
+                line = raw_line.split("#", 1)[0].strip()
+                if not line or not line.startswith("stream_order:"):
+                    continue
+                stream_order_text = line.split(":", 1)[1].strip()
+                break
+
+            if not stream_order_text:
+                raise ValueError("Missing stream_order entry.")
+
+            normalized_text = stream_order_text.replace("[", "").replace("]", "")
+            values = [int(token.strip()) for token in normalized_text.split(",") if token.strip()]
+            self.get_logger().info(f"Loaded stream_order from {path}: {values}")
+            return values
+        except Exception as exc:
+            self.get_logger().warning(f"Failed to parse settings_yaml {path}: {exc}")
+            return None
+
+    def _validate_stream_order(self, stream_order_raw: List[int]) -> np.ndarray:
+        if len(stream_order_raw) != self.num_sensors:
+            raise ValueError(f"stream_order must have {self.num_sensors} entries")
+
+        order = np.array([int(v) - 1 for v in stream_order_raw], dtype=np.int32)
+
+        if np.any(order < 0) or np.any(order >= self.num_sensors):
+            raise ValueError(f"stream_order indices must be in 1..{self.num_sensors}")
+        if len(np.unique(order)) != self.num_sensors:
+            raise ValueError("stream_order indices must be unique")
+
+        return order
+
+    def _on_discovery_timer(self) -> None:
+        self.receiver.send_discovery()
+
+    def _on_poll_timer(self) -> None:
+        latest_data, packet_count = self.receiver.poll_latest(self.packet_size, self.max_drain_packets)
+        now = time.perf_counter()
+
+        if packet_count <= 0 or latest_data is None:
+            if self.connection_active and self.last_packet_time > 0.0:
+                elapsed_without_packets = now - self.last_packet_time
+                if elapsed_without_packets >= self.connection_timeout_s:
+                    self.connection_active = False
+                    self.auto_tare_done = False
+                    self.start_time = now
+                    self.baseline_offset.fill(0.0)
+                    self.get_logger().warning(
+                        "Connection lost (no packets for %.2f s). Auto-tare will run after reconnect."
+                        % elapsed_without_packets
+                    )
+            return
+
+        if not self.connection_active:
+            self.connection_active = True
+            self.auto_tare_done = False
+            self.start_time = now
+            self.get_logger().info("Connection restored. Re-arming auto-tare.")
+
+        self.last_packet_time = now
+        self.latest_packet = latest_data
+        self.packets_since_report += packet_count
+        self._publish_packet(latest_data)
+
+    def _publish_packet(self, packet: bytes) -> None:
+        vals = np.frombuffer(packet, dtype="<f4", count=self.packet_float_count)
+        if vals.size != self.packet_float_count:
+            return
+
+        b_raw = vals.reshape(self.num_sensors, self.axes_per_sensor)
+        b_ordered = b_raw[self.stream_order, :]
+        if not self.auto_tare_done:
+            elapsed_s = time.perf_counter() - self.start_time
+            if elapsed_s >= self.auto_tare_delay_s:
+                self.baseline_offset = b_ordered.copy()
+                self.auto_tare_done = True
+                self.get_logger().info(
+                    "Auto-tare captured after %.2f s" % elapsed_s
+                )
+
+        b_ordered = b_ordered - self.baseline_offset
+        magnitudes = np.linalg.norm(b_ordered, axis=1)
+
+        raw_msg = Float32MultiArray()
+        raw_msg.data = vals.tolist()
+        self.raw_flat_pub.publish(raw_msg)
+
+        ordered_msg = Float32MultiArray()
+        ordered_msg.data = b_ordered.reshape(-1).tolist()
+        self.ordered_vectors_pub.publish(ordered_msg)
+
+        mag_msg = Float32MultiArray()
+        mag_msg.data = magnitudes.tolist()
+        self.magnitudes_pub.publish(mag_msg)
+
+        knee_vis_msg = KneeVisMsg()
+        knee_vis_msg.leg_id = "RF"
+        angle_deg, magnitude = self._compute_knee_vis(magnitudes)
+        knee_vis_msg.angle = float(angle_deg)
+        knee_vis_msg.magnitude = float(magnitude)
+        self.knee_vis_pub.publish(knee_vis_msg)
+
+    def _compute_knee_vis(self, sensor_mag: np.ndarray) -> tuple[float, float]:
+        """Compute summed-arrow angle/magnitude like contact_visualization_udp."""
+        if sensor_mag.size != self.num_sensors:
+            return 0.0, 0.0
+
+        angles_deg = 210 - np.arange(self.num_sensors, dtype=np.float32) * 30.0
+        angles_rad = np.deg2rad(angles_deg)
+
+        # Direction from each sensor to center = negative radial unit vector.
+        unit_x = -np.cos(angles_rad)
+        unit_y = -np.sin(angles_rad)
+
+        # arrow_len = np.clip(sensor_mag / self.mag_max, 0.0, 1.0) * self.sensor_radius * self.arrow_length_scale
+        sum_dx = float(np.sum(unit_x * sensor_mag))
+        sum_dy = float(np.sum(unit_y * sensor_mag))
+
+        sum_arrow_len = float(np.hypot(sum_dx, sum_dy))
+        # sum_arrow_max_len = self.sensor_radius * self.arrow_length_scale
+        # if sum_arrow_len > sum_arrow_max_len and sum_arrow_len > 1e-9:
+        #     scale = sum_arrow_max_len / sum_arrow_len
+        #     sum_dx *= scale
+        #     sum_dy *= scale
+        #     sum_arrow_len = sum_arrow_max_len
+
+        # Same vector angle convention as visualization math angle.
+        angle_deg = float(np.degrees(np.arctan2(sum_dy, sum_dx))) if sum_arrow_len > 1e-9 else 0.0
+        # angle_deg = 90.0
+        # sum_arrow_len = float(sensor_mag[0])
+        return angle_deg, sum_arrow_len
+
+    def _report_rate(self) -> None:
+        now = time.perf_counter()
+        elapsed = now - self.last_rate_report_time
+        if elapsed <= 0:
+            return
+
+        rate_hz = self.packets_since_report / elapsed
+        self.get_logger().info(f"Data rate: {rate_hz:.1f} packets/s")
+
+        self.last_rate_report_time = now
+        self.packets_since_report = 0
+
+
+def main(args=None) -> None:
+    rclpy.init(args=args)
+    node = DynasenseUdpReceiverNode()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

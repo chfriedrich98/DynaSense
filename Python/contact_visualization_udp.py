@@ -44,6 +44,15 @@ RING_SIZE_MIN = 15
 RING_SIZE_MAX = 50
 PLOT_MARGIN = 15.0
 RING_SAMPLE_COUNT = 360
+ARROW_COLOR = (70, 200, 90, 220)
+ARROW_LINE_WIDTH = 2
+ARROW_HEAD_LEN = 14
+ARROW_HEAD_WIDTH = 10
+ARROW_LENGTH_SCALE = 0.5
+SUM_ARROW_COLOR = (255, 120, 40, 235)
+SUM_ARROW_LINE_WIDTH = 4
+SUM_ARROW_HEAD_LEN = 18
+SUM_ARROW_HEAD_WIDTH = 14
 ARC_START_DEG = float(SENSOR_ANGLES_DEG[0])
 ARC_END_DEG = float(SENSOR_ANGLES_DEG[-1])
 PLOT_X_MIN = CENTER_X - SENSOR_RADIUS - PLOT_MARGIN
@@ -242,6 +251,41 @@ class LiveUdpPlot:
 
         self.ring_item = pg.ScatterPlotItem(size=7, pen=None, pxMode=True)
         self.plot.addItem(self.ring_item)
+
+        # Arrows from each sensor toward center, length scaled by magnitude
+        self.arrow_line_items = []
+        self.arrow_head_items = []
+        for _i in range(SENSOR_COUNT):
+            line_item = pg.PlotDataItem(
+                pen=pg.mkPen(ARROW_COLOR, width=ARROW_LINE_WIDTH)
+            )
+            self.plot.addItem(line_item)
+            self.arrow_line_items.append(line_item)
+
+            arrow_head = pg.ArrowItem(
+                angle=0,
+                headLen=ARROW_HEAD_LEN,
+                headWidth=ARROW_HEAD_WIDTH,
+                tailLen=None,
+                pen=pg.mkPen(ARROW_COLOR, width=1),
+                brush=pg.mkBrush(*ARROW_COLOR),
+            )
+            self.plot.addItem(arrow_head)
+            self.arrow_head_items.append(arrow_head)
+
+        self.sum_arrow_line_item = pg.PlotDataItem(
+            pen=pg.mkPen(SUM_ARROW_COLOR, width=SUM_ARROW_LINE_WIDTH)
+        )
+        self.plot.addItem(self.sum_arrow_line_item)
+        self.sum_arrow_head_item = pg.ArrowItem(
+            angle=0,
+            headLen=SUM_ARROW_HEAD_LEN,
+            headWidth=SUM_ARROW_HEAD_WIDTH,
+            tailLen=None,
+            pen=pg.mkPen(SUM_ARROW_COLOR, width=1),
+            brush=pg.mkBrush(*SUM_ARROW_COLOR),
+        )
+        self.plot.addItem(self.sum_arrow_head_item)
 
         self.value_label_default_fill = pg.mkBrush(0, 0, 0, 180)
         self.value_label_default_border = pg.mkPen(None)
@@ -455,6 +499,48 @@ class LiveUdpPlot:
             size=self._magnitude_to_ring_sizes(ring_mag),
             pen=None,
         )
+
+        # Update arrows: from sensor toward center, length proportional to magnitude
+        sum_dx = 0.0
+        sum_dy = 0.0
+        for i in range(SENSOR_COUNT):
+            sx, sy = sensor_pos[i, 0], sensor_pos[i, 1]
+            # Unit vector from sensor toward center
+            udx = (CENTER_X - sx) / SENSOR_RADIUS
+            udy = (CENTER_Y - sy) / SENSOR_RADIUS
+            arrow_len = np.clip(sensor_mag[i] / MAG_MAX, 0.0, 1.0) * SENSOR_RADIUS * ARROW_LENGTH_SCALE
+            dx = udx * arrow_len
+            dy = udy * arrow_len
+            ex = sx + dx
+            ey = sy + dy
+            self.arrow_line_items[i].setData([sx, ex], [sy, ey])
+            # ArrowItem angle=0 points left; positive angles rotate CW in screen coords (Y-down).
+            # Data-coord direction angle (Y-up math convention): atan2(udy, udx).
+            # Conversion to ArrowItem angle: 180 - math_angle accounts for left-default and Y-flip.
+            math_angle_deg = np.degrees(np.arctan2(udy, udx))
+            self.arrow_head_items[i].setPos(ex, ey)
+            self.arrow_head_items[i].setStyle(angle=180.0 - math_angle_deg)
+            sum_dx += dx
+            sum_dy += dy
+
+        sum_arrow_len = float(np.hypot(sum_dx, sum_dy))
+        if sum_arrow_len > 1e-6:
+            sum_arrow_max_len = SENSOR_RADIUS * ARROW_LENGTH_SCALE
+            if sum_arrow_len > sum_arrow_max_len:
+                scale = sum_arrow_max_len / sum_arrow_len
+                sum_dx *= scale
+                sum_dy *= scale
+
+            sum_ex = CENTER_X + sum_dx
+            sum_ey = CENTER_Y + sum_dy
+            sum_math_angle_deg = np.degrees(np.arctan2(sum_dy, sum_dx))
+            self.sum_arrow_line_item.setData([CENTER_X, sum_ex], [CENTER_Y, sum_ey])
+            self.sum_arrow_head_item.setPos(sum_ex, sum_ey)
+            self.sum_arrow_head_item.setStyle(angle=180.0 - sum_math_angle_deg)
+        else:
+            self.sum_arrow_line_item.setData([], [])
+            self.sum_arrow_head_item.setPos(CENTER_X, CENTER_Y)
+
         for label, magnitude in zip(self.sensor_value_labels, sensor_mag):
             self._update_value_label(label, magnitude)
 

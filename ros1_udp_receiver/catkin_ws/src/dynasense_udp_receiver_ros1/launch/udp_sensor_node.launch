@@ -1,0 +1,8 @@
+<launch>
+  <node pkg="dynasense_udp_receiver_ros1"
+        type="udp_sensor_node.py"
+        name="dynasense_udp_receiver"
+        output="screen">
+    <rosparam command="load" file="$(find dynasense_udp_receiver_ros1)/config/udp_sensor_params.yaml" />
+  </node>
+</launch>

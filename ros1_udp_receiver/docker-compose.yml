@@ -1,0 +1,13 @@
+services:
+  dynasense-ros1-udp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dynasense-ros1-udp
+    network_mode: host
+    environment:
+      - ROS_MASTER_URI=http://127.0.0.1:11311
+      - ROS_IP=127.0.0.1
+    volumes:
+      - ../Python:/workspaces/dynasense/Python:ro
+    command: roslaunch dynasense_udp_receiver_ros1 udp_sensor_node.launch

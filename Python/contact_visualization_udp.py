@@ -1,6 +1,8 @@
 import socket
 import struct
 import time
+import csv
+from datetime import datetime
 from pathlib import Path
 import serial
 import numpy as np
@@ -66,6 +68,7 @@ BACKGROUND_IMAGE_OPACITY = 0.35
 BACKGROUND_DISPLAY_SHIFT_X = -20.0
 BACKGROUND_DISPLAY_SHIFT_Y = -15.0
 SETTINGS_YAML_PATH = Path(__file__).with_name("udp_viewer_settings.yaml")
+COLLECTED_DATA_DIR = Path(__file__).with_name("collected_data")
 
 # Render and IO cadence are independent to minimize perceived latency.
 PLOT_FPS = 100.0
@@ -152,6 +155,7 @@ class LiveUdpPlot:
         self.receiver = UdpLatestPacketReceiver(PORT)
         self.receiver.send_discovery()
         print("Sent discovery... waiting for data")
+        self._init_csv_logger()
 
         self.latest_packet = None
         self.latest_packet_recv_time = None
@@ -384,6 +388,42 @@ class LiveUdpPlot:
         self.highlight_threshold = float(value)
         self.threshold_value_label.setText(str(value))
 
+    def _init_csv_logger(self):
+        COLLECTED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.csv_path = COLLECTED_DATA_DIR / f"udp_capture_{timestamp}.csv"
+        self.csv_file = self.csv_path.open("w", newline="", encoding="utf-8")
+        self.csv_writer = csv.writer(self.csv_file)
+
+        header = ["timestamp_unix_s", "timestamp_perf_s"]
+        header.extend(f"sensor{i + 1}_x" for i in range(SENSOR_COUNT))
+        header.extend(f"sensor{i + 1}_y" for i in range(SENSOR_COUNT))
+        header.extend(f"sensor{i + 1}_z" for i in range(SENSOR_COUNT))
+        header.extend(f"sensor{i + 1}_mag" for i in range(SENSOR_COUNT))
+        self.csv_writer.writerow(header)
+        self.csv_file.flush()
+        print(f"Logging UDP samples to: {self.csv_path}")
+
+    def _log_packet_to_csv(self, vals):
+        if vals.size != PACKET_FLOAT_COUNT:
+            return
+
+        b_raw = vals.reshape(SENSOR_COUNT, AXES_PER_SENSOR)
+        b = b_raw[self.stream_order, :] - self.b_offset
+        sensor_mag = np.linalg.norm(b, axis=1)
+
+        row = [time.time(), time.perf_counter()]
+        row.extend(float(v) for v in b[:, 0])
+        row.extend(float(v) for v in b[:, 1])
+        row.extend(float(v) for v in b[:, 2])
+        row.extend(float(v) for v in sensor_mag)
+        self.csv_writer.writerow(row)
+
+    def _close_csv_logger(self):
+        if getattr(self, "csv_file", None) is not None and not self.csv_file.closed:
+            self.csv_file.flush()
+            self.csv_file.close()
+
     def _load_settings_yaml(self):
         if not SETTINGS_YAML_PATH.exists():
             return
@@ -498,6 +538,8 @@ class LiveUdpPlot:
             # print("values =", struct.unpack("<12f", latest_data))  # Debug: print the raw packet data
             self.latest_packet_recv_time = time.perf_counter()
             self.packets_since_report += packet_count
+            vals = np.frombuffer(latest_data, dtype="<f4", count=PACKET_FLOAT_COUNT)
+            self._log_packet_to_csv(vals)
 
     def _on_draw_tick(self):
         if self.latest_packet is None:
@@ -603,7 +645,10 @@ class LiveUdpPlot:
         self.latency_max_ms = None
 
     def run(self):
-        self.app.exec()
+        try:
+            self.app.exec()
+        finally:
+            self._close_csv_logger()
 
 
 def reset_device(serial_port=SERIAL_PORT, baud=SERIAL_BAUD, timeout_s=SERIAL_TIMEOUT_S):

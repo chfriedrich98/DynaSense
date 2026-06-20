@@ -190,12 +190,12 @@ class DynasenseUdpReceiverNode:
         sum_dy = float(np.sum(unit_y * sensor_mag))
 
         sum_arrow_len = float(np.hypot(sum_dx, sum_dy))
+        angle_rad = 0.0
         if sum_arrow_len > 1e-9:
             angle_rad = float(np.mod(np.arctan2(sum_dy, sum_dx), 2.0 * np.pi))
-            angle_deg = float(np.degrees(angle_rad))
         else:
-            angle_deg = 0.0
-        return angle_deg, sum_arrow_len
+            angle_rad = 0.0
+        return angle_rad, sum_arrow_len
 
     def _on_report_timer(self, _event):
         now = time.perf_counter()
